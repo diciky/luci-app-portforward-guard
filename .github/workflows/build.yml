@@ -14,16 +14,32 @@ jobs:
 
       - name: Set up OpenWrt SDK
         run: |
-          mkdir -p openwrt-sdk
-          cd openwrt-sdk
-          curl -sL "https://downloads.openwrt.org/releases/23.05.5/x86_64/openwrt-sdk-23.05.5-x86_64_gcc-12.3.0_musl.Linux-x86_64.tar.xz" -o sdk.tar.xz
-          if [ ! -f sdk.tar.xz ] || [ ! -s sdk.tar.xz ]; then
-            curl -sL "https://downloads.openwrt.org/releases/24.10.0/x86_64/openwrt-sdk-24.10.0-x86_64_gcc-14.2.0_musl.Linux-x86_64.tar.xz" -o sdk.tar.xz
+          mkdir -p openwrt-sdk && cd openwrt-sdk
+          # Try different SDK versions
+          SDK_URLS=(
+            "https://downloads.openwrt.org/releases/23.05.5/x86_64/openwrt-sdk-23.05.5-x86_64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+            "https://downloads.openwrt.org/releases/23.05.3/x86_64/openwrt-sdk-23.05.3-x86_64_gcc-12.3.0_musl.Linux-x86_64.tar.zst"
+            "https://downloads.openwrt.org/snapshots/targets/x86/64/openwrt-sdk-x86-64_gcc-13.2.0_musl.Linux-x86_64.tar.xz"
+          )
+          for url in "${SDK_URLS[@]}"; do
+            echo "Trying $url"
+            if curl -sL "$url" -o sdk.tar.xz && [ -s sdk.tar.xz ]; then
+              file sdk.tar.xz | grep -q "XZ compressed\|tar archive" && break
+            fi
+          done
+          if [ ! -s sdk.tar.xz ] || ! file sdk.tar.xz | grep -q "XZ compressed\|tar archive"; then
+            echo "Failed to download valid SDK"
+            ls -la sdk.tar.xz 2>/dev/null || true
+            head -c 100 sdk.tar.xz 2>/dev/null | xxd || true
+            exit 1
           fi
           tar xJf sdk.tar.xz
-          mv openwrt-sdk-*/* ../ 2>/dev/null || true
-          mv ../openwrt-sdk-*/* ../ 2>/dev/null || true
+          ls -la
           cd ..
+          rm -rf openwrt-sdk 2>/dev/null || true
+          ls -la openwrt-sdk-* 2>/dev/null || true
+          if [ -d openwrt-sdk-* ]; then mv openwrt-sdk-*/* . 2>/dev/null || true; fi
+          ls -la
 
       - name: Copy package files
         run: |
