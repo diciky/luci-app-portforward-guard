@@ -1,0 +1,247 @@
+<%+header%>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+<style>
+#map { height: 400px; width: 100%; }
+.marker-cluster-small { background-color: #ff6b6b; }
+.marker-cluster-small div { background-color: #ff8787; }
+.marker-cluster-medium { background-color: #ffa94d; }
+.marker-cluster-medium div { background-color: #ffc078; }
+.marker-cluster-large { background-color: #ff6b6b; }
+.marker-cluster-large div { background-color: #ff8787; }
+.marker-cluster { background-clip: padding-box; border-radius: 20px; }
+.marker-cluster div { width: 30px; height: 30px; margin-left: 5px; margin-top: 5px; text-align: center; border-radius: 15px; font-size: 12px; color: white; font-weight: bold; }
+.status-green { color: #51cf66; font-weight: bold; }
+.status-yellow { color: #fcc419; font-weight: bold; }
+.status-red { color: #ff6b6b; font-weight: bold; }
+.refresh-toggle { margin: 10px 0; }
+.connection-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.connection-table th, .connection-table td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
+.connection-table th { background-color: #f8f9fa; }
+.connection-table tr:hover { background-color: #f1f3f5; }
+.action-btn { padding: 4px 8px; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; }
+.action-btn.disconnect { background: #ff6b6b; color: white; }
+.action-btn.blacklist { background: #ffa94d; color: white; }
+.action-btn.whitelist { background: #51cf66; color: white; }
+</style>
+
+<div class="cbi-map">
+    <h2>PortForward Guard - 连接监控</h2>
+
+    <div class="cbi-section">
+        <div class="cbi-section-node">
+            <div style="margin:10px 0;">
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/status")%>">连接</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/blacklist")%>">黑名单</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/whitelist")%>">白名单</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/logs")%>">日志</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/settings")%>">配置</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="cbi-section">
+        <legend>实时连接监控</legend>
+        <div class="cbi-section-node">
+            <div class="refresh-toggle">
+                <span>自动刷新:</span>
+                <select id="refreshInterval" onchange="setRefresh(this.value)">
+                    <option value="0">关闭</option>
+                    <option value="5" selected>5秒</option>
+                    <option value="10">10秒</option>
+                    <option value="30">30秒</option>
+                </select>
+                <button class="btn" onclick="refreshConnections()">刷新</button>
+                <span id="lastUpdate" style="margin-left:20px;color:#868e96;">最后更新: -</span>
+            </div>
+            <div id="stats" style="margin:10px 0;padding:10px;background:#f8f9fa;border-radius:5px;">
+                <span>总连接数: <strong id="totalConn">-</strong></span>
+                <span style="margin-left:20px;">IPv4: <strong id="ipv4Conn">-</strong></span>
+                <span style="margin-left:20px;">IPv6: <strong id="ipv6Conn">-</strong></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="cbi-section">
+        <legend>全球连接地图</legend>
+        <div class="cbi-section-node">
+            <div id="map"></div>
+        </div>
+    </div>
+
+    <div class="cbi-section">
+        <legend>活动连接列表</legend>
+        <div class="cbi-section-node">
+            <table class="connection-table" id="connTable">
+                <thead>
+                    <tr>
+                        <th>源IP</th>
+                        <th>源端口</th>
+                        <th>目标IP</th>
+                        <th>目标端口</th>
+                        <th>协议</th>
+                        <th>状态</th>
+                        <th>地理位置</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="connTableBody">
+                    <tr><td colspan="8" style="text-align:center;padding:20px;">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+var map = null;
+var markers = null;
+var refreshTimer = null;
+var currentRefresh = 5;
+
+function initMap() {
+    map = L.map('map').setView([20, 0], 2);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles &copy; Esri'
+    }).addTo(map);
+    markers = L.markerClusterGroup().addTo(map);
+}
+
+function getGeoColor(status) {
+    switch(status) {
+        case 'whitelist': return '#51cf66';
+        case 'blacklist': return '#ff6b6b';
+        default: return '#fcc419';
+    }
+}
+
+function updateMap(connections) {
+    if (!map) initMap();
+    markers.clearLayers();
+
+    connections.forEach(function(conn) {
+        if (conn.lat && conn.lon) {
+            var color = getGeoColor(conn.listStatus || 'unknown');
+            var marker = L.circleMarker([conn.lat, conn.lon], {
+                radius: 8,
+                fillColor: color,
+                color: '#fff',
+                weight: 2,
+                fillOpacity: 0.8
+            });
+            marker.bindPopup('<b>' + conn.src + '</b><br>端口: ' + conn.dport + '<br>国家: ' + (conn.country || '未知') + '<br>状态: ' + conn.state);
+            markers.addLayer(marker);
+        }
+    });
+}
+
+function setRefresh(seconds) {
+    currentRefresh = parseInt(seconds);
+    if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+    }
+    if (seconds > 0) {
+        refreshTimer = setInterval(refreshConnections, seconds * 1000);
+    }
+}
+
+function refreshConnections() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?monitor', true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            try {
+                var data = JSON.parse(xhr.responseText);
+                updateConnectionTable(data.connections);
+                updateMap(data.connections);
+                document.getElementById('totalConn').textContent = data.total || 0;
+                document.getElementById('ipv4Conn').textContent = data.ipv4 || 0;
+                document.getElementById('ipv6Conn').textContent = data.ipv6 || 0;
+                var now = new Date();
+                document.getElementById('lastUpdate').textContent = '最后更新: ' + now.toLocaleTimeString();
+            } catch (e) {
+                console.error('Parse error:', e);
+            }
+        }
+    };
+    xhr.send();
+}
+
+function updateConnectionTable(connections) {
+    var tbody = document.getElementById('connTableBody');
+    if (!connections || connections.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;">暂无连接</td></tr>';
+        return;
+    }
+
+    var html = '';
+    connections.forEach(function(conn) {
+        var statusClass = conn.listStatus === 'whitelist' ? 'status-green' : (conn.listStatus === 'blacklist' ? 'status-red' : 'status-yellow');
+        html += '<tr>';
+        html += '<td><span class="' + statusClass + '">' + conn.src + '</span></td>';
+        html += '<td>' + (conn.sport || '-') + '</td>';
+        html += '<td>' + conn.dst + '</td>';
+        html += '<td>' + conn.dport + '</td>';
+        html += '<td>' + conn.proto.toUpperCase() + '</td>';
+        html += '<td>' + conn.state + '</td>';
+        html += '<td>' + (conn.country || '未知') + '</td>';
+        html += '<td>';
+        html += '<button class="action-btn disconnect" onclick="disconnect(\'' + conn.id + '\')">断开</button> ';
+        html += '<button class="action-btn blacklist" onclick="addBlacklist(\'' + conn.src + '\')">黑名单</button> ';
+        html += '<button class="action-btn whitelist" onclick="addWhitelist(\'' + conn.src + '\')">白名单</button>';
+        html += '</td>';
+        html += '</tr>';
+    });
+    tbody.innerHTML = html;
+}
+
+function disconnect(connId) {
+    if (!confirm('确认断开此连接?')) return;
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?disconnect&conn=' + encodeURIComponent(connId), true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            alert('连接已断开');
+            refreshConnections();
+        }
+    };
+    xhr.send();
+}
+
+function addBlacklist(ip) {
+    var duration = prompt('请输入封禁时长(秒):\n300=5分钟, 3600=1小时, 86400=1天, 0=永久', '3600');
+    if (duration === null) return;
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?blacklist_add&ip=' + encodeURIComponent(ip) + '&duration=' + encodeURIComponent(duration), true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            alert('已添加到黑名单');
+            refreshConnections();
+        }
+    };
+    xhr.send();
+}
+
+function addWhitelist(ip) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?whitelist_add&ip=' + encodeURIComponent(ip), true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            alert('已添加到白名单');
+            refreshConnections();
+        }
+    };
+    xhr.send();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    initMap();
+    refreshConnections();
+    if (currentRefresh > 0) {
+        refreshTimer = setInterval(refreshConnections, currentRefresh * 1000);
+    }
+});
+</script>
+<%+footer%>

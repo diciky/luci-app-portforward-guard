@@ -1,0 +1,18 @@
+# Build artifacts
+*.ipk
+*.deb
+*luci*.tar.gz
+
+# OpenWrt build dir
+openwrt*/
+openwrt_build*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temp
+*.tmp
+*.log

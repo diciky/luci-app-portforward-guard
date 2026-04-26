@@ -1,0 +1,144 @@
+<%+header%>
+<style>
+.whitelist-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.whitelist-table th, .whitelist-table td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
+.whitelist-table th { background-color: #f8f9fa; }
+.whitelist-table tr:hover { background-color: #f1f3f5; }
+.action-btn { padding: 4px 8px; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; }
+.action-btn.delete { background: #ff6b6b; color: white; }
+.action-btn.edit { background: #339af0; color: white; }
+</style>
+
+<div class="cbi-map">
+    <h2>白名单管理</h2>
+
+    <div class="cbi-section">
+        <div class="cbi-section-node">
+            <div style="margin:10px 0;">
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/status")%>">连接</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/blacklist")%>">黑名单</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/whitelist")%>">白名单</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/logs")%>">日志</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/settings")%>">配置</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="cbi-section">
+        <legend>添加白名单</legend>
+        <div class="cbi-section-node">
+            <form onsubmit="return addWhitelistManual()">
+                <div style="padding:15px;margin:10px 0;border:1px solid #51cf66;">
+                    <div style="margin:10px 0;">
+                        <label style="display:inline-block;width:120px;">IP/CIDR:</label>
+                        <input type="text" id="wl_ip" placeholder="例如: 192.168.1.100 或 10.0.0.0/8" style="padding:8px;width:200px;border:1px solid #999;" />
+                    </div>
+                    <div style="margin:10px 0;">
+                        <label style="display:inline-block;width:120px;">描述:</label>
+                        <input type="text" id="wl_desc" placeholder="描述说明" style="padding:8px;width:200px;border:1px solid #999;" />
+                    </div>
+                    <div style="margin:15px 0;">
+                        <input type="submit" class="btn" style="background:#51cf66;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;" value="添加到白名单" />
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="cbi-section">
+        <legend>白名单列表</legend>
+        <div class="cbi-section-node">
+            <table class="whitelist-table">
+                <thead>
+                    <tr>
+                        <th>IP/CIDR</th>
+                        <th>描述</th>
+                        <th>添加时间</th>
+                        <th>最后出现</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="whitelistTableBody">
+                    <tr><td colspan="5" style="text-align:center;padding:20px;">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function loadWhitelist() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?whitelist_list', true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            try {
+                var data = JSON.parse(xhr.responseText);
+                updateWhitelistTable(data.whitelist || []);
+            } catch (e) {
+                console.error('Parse error:', e);
+            }
+        }
+    };
+    xhr.send();
+}
+
+function updateWhitelistTable(whitelist) {
+    var tbody = document.getElementById('whitelistTableBody');
+    if (!whitelist || whitelist.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;">暂无白名单</td></tr>';
+        return;
+    }
+
+    var html = '';
+    whitelist.forEach(function(item) {
+        html += '<tr>';
+        html += '<td>' + item.ip + '</td>';
+        html += '<td>' + (item.desc || '-') + '</td>';
+        html += '<td>' + (item.addedTime || '-') + '</td>';
+        html += '<td>' + (item.lastSeen || '-') + '</td>';
+        html += '<td>';
+        html += '<button class="action-btn delete" onclick="removeWhitelist(\'' + item.ip + '\')">删除</button>';
+        html += '</td>';
+        html += '</tr>';
+    });
+    tbody.innerHTML = html;
+}
+
+function addWhitelistManual() {
+    var ip = document.getElementById('wl_ip').value;
+    var desc = document.getElementById('wl_desc').value;
+
+    if (!ip) {
+        alert('请输入IP或CIDR');
+        return false;
+    }
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?whitelist_add&ip=' + encodeURIComponent(ip) + '&desc=' + encodeURIComponent(desc), true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            alert('已添加到白名单');
+            loadWhitelist();
+        }
+    };
+    xhr.send();
+    return false;
+}
+
+function removeWhitelist(ip) {
+    if (!confirm('确认将 ' + ip + ' 从白名单移除?')) return;
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?whitelist_del&ip=' + encodeURIComponent(ip), true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            alert('已从白名单移除');
+            loadWhitelist();
+        }
+    };
+    xhr.send();
+}
+
+document.addEventListener('DOMContentLoaded', loadWhitelist);
+</script>
+<%+footer%>

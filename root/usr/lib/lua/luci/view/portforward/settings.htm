@@ -1,0 +1,180 @@
+<%+header%>
+<style>
+.settings-form { max-width: 600px; }
+.settings-row { display: flex; padding: 10px; border-bottom: 1px solid #eee; align-items: center; }
+.settings-row label { display: inline-block; width: 200px; font-weight: bold; }
+.settings-row input[type="text"], .settings-row input[type="number"], .settings-row select { padding: 8px; width: 200px; border: 1px solid #ddd; border-radius: 4px; }
+.settings-row input[type="checkbox"] { width: 20px; height: 20px; }
+.settings-row .desc { color: #666; font-size: 12px; margin-left: 10px; }
+</style>
+
+<div class="cbi-map">
+    <h2>配置设置</h2>
+
+    <div class="cbi-section">
+        <div class="cbi-section-node">
+            <div style="margin:10px 0;">
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/status")%>">连接</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/blacklist")%>">黑名单</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/whitelist")%>">白名单</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/logs")%>">日志</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/settings")%>">配置</a>
+            </div>
+        </div>
+    </div>
+
+    <form onsubmit="return saveSettings()">
+        <div class="cbi-section">
+            <legend>基本设置</legend>
+            <div class="cbi-section-node settings-form">
+                <div class="settings-row">
+                    <label>启用监控:</label>
+                    <input type="checkbox" id="cfg_enabled" checked />
+                    <span class="desc">是否启用端口转发监控</span>
+                </div>
+                <div class="settings-row">
+                    <label>刷新间隔:</label>
+                    <select id="cfg_refresh_interval">
+                        <option value="5">5秒</option>
+                        <option value="10">10秒</option>
+                        <option value="30">30秒</option>
+                        <option value="60">1分钟</option>
+                    </select>
+                    <span class="desc">自动刷新间隔</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="cbi-section">
+            <legend>自动封禁设置</legend>
+            <div class="cbi-section-node settings-form">
+                <div class="settings-row">
+                    <label>自动封禁:</label>
+                    <input type="checkbox" id="cfg_auto_block" checked />
+                    <span class="desc">检测到登录事件时自动封禁</span>
+                </div>
+                <div class="settings-row">
+                    <label>登录自动封禁:</label>
+                    <input type="checkbox" id="cfg_auto_block_login" checked />
+                    <span class="desc">SSH/LuCI登录事件触发自动封禁</span>
+                </div>
+                <div class="settings-row">
+                    <label>默认封禁时长:</label>
+                    <select id="cfg_default_duration">
+                        <option value="300">5分钟</option>
+                        <option value="900">15分钟</option>
+                        <option value="3600">1小时</option>
+                        <option value="86400">1天</option>
+                        <option value="0">永久</option>
+                    </select>
+                    <span class="desc">自动封禁的默认时长</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="cbi-section">
+            <legend>白名单设置</legend>
+            <div class="cbi-section-node settings-form">
+                <div class="settings-row">
+                    <label>严格模式:</label>
+                    <input type="checkbox" id="cfg_strict_mode" />
+                    <span class="desc">只在白名单中的IP允许连接</span>
+                </div>
+                <div class="settings-row">
+                    <label>自动添加失败登录:</label>
+                    <input type="checkbox" id="cfg_auto_add_failed" checked />
+                    <span class="desc">失败登录自动加入黑名单</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="cbi-section">
+            <legend>日志设置</legend>
+            <div class="cbi-section-node settings-form">
+                <div class="settings-row">
+                    <label>记录连接:</label>
+                    <input type="checkbox" id="cfg_log_connections" checked />
+                </div>
+                <div class="settings-row">
+                    <label>记录封禁:</label>
+                    <input type="checkbox" id="cfg_log_blocks" checked />
+                </div>
+                <div class="settings-row">
+                    <label>记录自动封禁:</label>
+                    <input type="checkbox" id="cfg_log_auto_blocks" checked />
+                </div>
+            </div>
+        </div>
+
+        <div class="cbi-section">
+            <div class="cbi-section-node">
+                <input type="submit" class="btn" style="background:#51cf66;color:white;padding:10px 30px;border:none;border-radius:5px;cursor:pointer;" value="保存设置" />
+                <span id="saveStatus" style="margin-left:20px;"></span>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+function loadSettings() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?settings_get', true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            try {
+                var data = JSON.parse(xhr.responseText);
+                document.getElementById('cfg_enabled').checked = data.enabled == '1';
+                document.getElementById('cfg_refresh_interval').value = data.refresh_interval || '5';
+                document.getElementById('cfg_auto_block').checked = data.auto_block == '1';
+                document.getElementById('cfg_auto_block_login').checked = data.auto_block_login == '1';
+                document.getElementById('cfg_default_duration').value = data.default_duration || '3600';
+                document.getElementById('cfg_strict_mode').checked = data.strict_mode == '1';
+                document.getElementById('cfg_auto_add_failed').checked = data.auto_add_failed_login == '1';
+                document.getElementById('cfg_log_connections').checked = data.log_connections == '1';
+                document.getElementById('cfg_log_blocks').checked = data.log_blocks == '1';
+                document.getElementById('cfg_log_auto_blocks').checked = data.log_auto_blocks == '1';
+            } catch (e) {
+                console.error('Parse error:', e);
+            }
+        }
+    };
+    xhr.send();
+}
+
+function saveSettings() {
+    var settings = {
+        enabled: document.getElementById('cfg_enabled').checked ? '1' : '0',
+        refresh_interval: document.getElementById('cfg_refresh_interval').value,
+        auto_block: document.getElementById('cfg_auto_block').checked ? '1' : '0',
+        auto_block_login: document.getElementById('cfg_auto_block_login').checked ? '1' : '0',
+        default_duration: document.getElementById('cfg_default_duration').value,
+        strict_mode: document.getElementById('cfg_strict_mode').checked ? '1' : '0',
+        auto_add_failed_login: document.getElementById('cfg_auto_add_failed').checked ? '1' : '0',
+        log_connections: document.getElementById('cfg_log_connections').checked ? '1' : '0',
+        log_blocks: document.getElementById('cfg_log_blocks').checked ? '1' : '0',
+        log_auto_blocks: document.getElementById('cfg_log_auto_blocks').checked ? '1' : '0'
+    };
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/portforward', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    var body = 'cmd=settings_save';
+    for (var key in settings) {
+        body += '&' + key + '=' + encodeURIComponent(settings[key]);
+    }
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            document.getElementById('saveStatus').textContent = '设置已保存';
+            document.getElementById('saveStatus').style.color = '#51cf66';
+            setTimeout(function() {
+                document.getElementById('saveStatus').textContent = '';
+            }, 3000);
+        }
+    };
+    xhr.send(body);
+    return false;
+}
+
+document.addEventListener('DOMContentLoaded', loadSettings);
+</script>
+<%+footer%>

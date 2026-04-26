@@ -1,0 +1,119 @@
+<%+header%>
+<style>
+.logs-container { max-height: 500px; overflow-y: auto; padding: 10px; background: #1a1a2e; border-radius: 5px; }
+.log-entry { padding: 5px 10px; margin: 2px 0; border-radius: 3px; font-family: monospace; font-size: 12px; }
+.log-connection { background: #16213e; color: #4fc3f7; }
+.log-block { background: #3d0000; color: #ff6b6b; }
+.log-auto-block { background: #4a1400; color: #ffa94d; }
+.log-whitelist { background: #0d3d00; color: #51cf66; }
+.log-info { background: #16213e; color: #cccccc; }
+.log-filter { margin: 10px 0; }
+.log-filter select, .log-filter input { padding: 5px; border: 1px solid #ddd; border-radius: 4px; }
+</style>
+
+<div class="cbi-map">
+    <h2>活动日志</h2>
+
+    <div class="cbi-section">
+        <div class="cbi-section-node">
+            <div style="margin:10px 0;">
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/status")%>">连接</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/blacklist")%>">黑名单</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/whitelist")%>">白名单</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/logs")%>">日志</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/settings")%>">配置</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="cbi-section">
+        <legend>日志过滤</legend>
+        <div class="cbi-section-node log-filter">
+            <select id="logTypeFilter" onchange="loadLogs()">
+                <option value="">全部类型</option>
+                <option value="connection">连接</option>
+                <option value="block">封禁</option>
+                <option value="auto_block">自动封禁</option>
+                <option value="whitelist">白名单</option>
+            </select>
+            <input type="text" id="logIpFilter" placeholder="过滤IP" onkeyup="loadLogs()" style="margin-left:10px;" />
+            <button class="btn" onclick="clearLogs()" style="margin-left:10px;">清除日志</button>
+            <button class="btn" onclick="loadLogs()">刷新</button>
+        </div>
+    </div>
+
+    <div class="cbi-section">
+        <legend>日志内容</legend>
+        <div class="cbi-section-node">
+            <div id="logsContainer" class="logs-container">
+                <div style="text-align:center;padding:20px;color:#666;">加载中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function loadLogs() {
+    var xhr = new XMLHttpRequest();
+    var typeFilter = document.getElementById('logTypeFilter').value;
+    var ipFilter = document.getElementById('logIpFilter').value;
+    var url = '/cgi-bin/portforward?logs';
+    if (typeFilter) url += '&type=' + encodeURIComponent(typeFilter);
+    if (ipFilter) url += '&ip=' + encodeURIComponent(ipFilter);
+
+    xhr.open('GET', url, true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            try {
+                var data = JSON.parse(xhr.responseText);
+                updateLogsDisplay(data.logs || []);
+            } catch (e) {
+                console.error('Parse error:', e);
+            }
+        }
+    };
+    xhr.send();
+}
+
+function updateLogsDisplay(logs) {
+    var container = document.getElementById('logsContainer');
+    if (!logs || logs.length === 0) {
+        container.innerHTML = '<div style="text-align:center;padding:20px;color:#666;">暂无日志</div>';
+        return;
+    }
+
+    var html = '';
+    logs.forEach(function(log) {
+        var logClass = 'log-entry log-info';
+        switch(log.type) {
+            case 'connection': logClass = 'log-entry log-connection'; break;
+            case 'block': logClass = 'log-entry log-block'; break;
+            case 'auto_block': logClass = 'log-entry log-auto-block'; break;
+            case 'whitelist': logClass = 'log-entry log-whitelist'; break;
+        }
+        html += '<div class="' + logClass + '">';
+        html += '[' + log.time + '] ';
+        html += '[' + log.type.toUpperCase() + '] ';
+        html += log.ip ? log.ip + ' - ' : '';
+        html += log.message;
+        html += '</div>';
+    });
+    container.innerHTML = html;
+}
+
+function clearLogs() {
+    if (!confirm('确认清除所有日志?')) return;
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?logs_clear', true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            alert('日志已清除');
+            loadLogs();
+        }
+    };
+    xhr.send();
+}
+
+document.addEventListener('DOMContentLoaded', loadLogs);
+</script>
+<%+footer%>

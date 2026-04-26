@@ -1,0 +1,161 @@
+<%+header%>
+<style>
+.blacklist-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.blacklist-table th, .blacklist-table td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
+.blacklist-table th { background-color: #f8f9fa; }
+.blacklist-table tr:hover { background-color: #f1f3f5; }
+.status-permanent { color: #ff6b6b; font-weight: bold; }
+.status-temp { color: #ffa94d; font-weight: bold; }
+.action-btn { padding: 4px 8px; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; }
+.action-btn.delete { background: #ff6b6b; color: white; }
+.action-btn.unban { background: #51cf66; color: white; }
+</style>
+
+<div class="cbi-map">
+    <h2>黑名单管理</h2>
+
+    <div class="cbi-section">
+        <div class="cbi-section-node">
+            <div style="margin:10px 0;">
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/status")%>">连接</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/blacklist")%>">黑名单</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/whitelist")%>">白名单</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/logs")%>">日志</a>
+                <a class="btn" href="<%=luci.dispatcher.build_url("admin/services/portforward/settings")%>">配置</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="cbi-section">
+        <legend>添加黑名单</legend>
+        <div class="cbi-section-node">
+            <form onsubmit="return addBlacklistManual()">
+                <div style="padding:15px;margin:10px 0;border:1px solid #ff6b6b;">
+                    <div style="margin:10px 0;">
+                        <label style="display:inline-block;width:120px;">IP地址:</label>
+                        <input type="text" id="bl_ip" placeholder="例如: 192.168.1.100" pattern="[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" style="padding:8px;width:200px;border:1px solid #999;" />
+                    </div>
+                    <div style="margin:10px 0;">
+                        <label style="display:inline-block;width:120px;">时长:</label>
+                        <select id="bl_duration" style="padding:8px;width:200px;border:1px solid #999;">
+                            <option value="300">5分钟</option>
+                            <option value="900">15分钟</option>
+                            <option value="3600" selected>1小时</option>
+                            <option value="86400">1天</option>
+                            <option value="0">永久</option>
+                        </select>
+                    </div>
+                    <div style="margin:10px 0;">
+                        <label style="display:inline-block;width:120px;">原因:</label>
+                        <input type="text" id="bl_reason" placeholder="封禁原因" style="padding:8px;width:200px;border:1px solid #999;" />
+                    </div>
+                    <div style="margin:15px 0;">
+                        <input type="submit" class="btn" style="background:#ff6b6b;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;" value="添加到黑名单" />
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="cbi-section">
+        <legend>黑名单列表</legend>
+        <div class="cbi-section-node">
+            <table class="blacklist-table">
+                <thead>
+                    <tr>
+                        <th>IP地址</th>
+                        <th>原因</th>
+                        <th>类型</th>
+                        <th>剩余时间</th>
+                        <th>添加时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="blacklistTableBody">
+                    <tr><td colspan="6" style="text-align:center;padding:20px;">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function loadBlacklist() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?blacklist_list', true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            try {
+                var data = JSON.parse(xhr.responseText);
+                updateBlacklistTable(data.blacklist || []);
+            } catch (e) {
+                console.error('Parse error:', e);
+            }
+        }
+    };
+    xhr.send();
+}
+
+function updateBlacklistTable(blacklist) {
+    var tbody = document.getElementById('blacklistTableBody');
+    if (!blacklist || blacklist.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;">暂无黑名单</td></tr>';
+        return;
+    }
+
+    var html = '';
+    blacklist.forEach(function(item) {
+        var typeClass = item.permanent ? 'status-permanent' : 'status-temp';
+        var typeText = item.permanent ? '永久' : '临时';
+        html += '<tr>';
+        html += '<td>' + item.ip + '</td>';
+        html += '<td>' + (item.reason || '-') + '</td>';
+        html += '<td><span class="' + typeClass + '">' + typeText + '</span></td>';
+        html += '<td>' + (item.remaining || '-') + '</td>';
+        html += '<td>' + (item.addedTime || '-') + '</td>';
+        html += '<td>';
+        html += '<button class="action-btn unban" onclick="removeBlacklist(\'' + item.ip + '\')">解除</button>';
+        html += '</td>';
+        html += '</tr>';
+    });
+    tbody.innerHTML = html;
+}
+
+function addBlacklistManual() {
+    var ip = document.getElementById('bl_ip').value;
+    var duration = document.getElementById('bl_duration').value;
+    var reason = document.getElementById('bl_reason').value;
+
+    if (!ip) {
+        alert('请输入IP地址');
+        return false;
+    }
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?blacklist_add&ip=' + encodeURIComponent(ip) + '&duration=' + encodeURIComponent(duration) + '&reason=' + encodeURIComponent(reason), true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            alert('已添加到黑名单');
+            loadBlacklist();
+        }
+    };
+    xhr.send();
+    return false;
+}
+
+function removeBlacklist(ip) {
+    if (!confirm('确认将 ' + ip + ' 从黑名单移除?')) return;
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/portforward?blacklist_del&ip=' + encodeURIComponent(ip), true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            alert('已从黑名单移除');
+            loadBlacklist();
+        }
+    };
+    xhr.send();
+}
+
+document.addEventListener('DOMContentLoaded', loadBlacklist);
+</script>
+<%+footer%>

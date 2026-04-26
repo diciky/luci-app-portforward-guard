@@ -1,0 +1,17 @@
+#!/bin/sh
+# Initialize portforward-guard UCI config on first boot
+
+. /lib/functions.sh
+
+# Only run once on first boot
+[ "$Booted" = "1" ] && exit 0
+
+# Create ipsets for blacklist/whitelist
+ipset create portforward_blacklist hash:ip timeout 3600 2>/dev/null || true
+ipset create portforward_whitelist hash:net 2>/dev/null || true
+
+# Create log directory
+mkdir -p /var/log/portforward-guard
+mkdir -p /tmp/portforward-guard
+
+exit 0

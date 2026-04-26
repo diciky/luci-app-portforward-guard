@@ -1,0 +1,42 @@
+name: Build IPK Package
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up OpenWrt SDK
+        run: |
+          mkdir -p openwrt-sdk
+          cd openwrt-sdk
+          curl -sL https://downloads.openwrt.org/releases/23.05.3/x86_64/openwrt-sdk-23.05.3-x86_64_gcc-12.3.0_musl.Linux-x86_64.tar.xz | tar xJ
+          mv openwrt-sdk-*/* ../
+          cd ..
+
+      - name: Copy package files
+        run: |
+          cp -r root/* openwrt-sdk/package/luci-app-portforward-guard/
+
+      - name: Update feeds
+        run: |
+          cd openwrt-sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure package
+        run: |
+          cd openwrt-sdk
+          make package/luci-app-portforward-guard/compile
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-portforward-guard-ipk
+          path: openwrt-sdk/bin/packages/*/luci/luci-app-portforward-guard*.ipk

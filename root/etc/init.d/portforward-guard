@@ -1,0 +1,34 @@
+#!/bin/sh /etc/rc.common
+# PortForward Guard Init Script
+
+START=95
+STOP=15
+
+USE_PROCD=0
+
+start() {
+    # Create ipsets
+    ipset create portforward_blacklist hash:ip timeout 3600 2>/dev/null || true
+    ipset create portforward_whitelist hash:net 2>/dev/null || true
+
+    # Create log directory
+    mkdir -p /var/log/portforward-guard
+    mkdir -p /tmp/portforward-guard
+
+    # Load config
+    config_load portforward
+    local enabled
+    config_get enabled config enabled '1'
+    [ "$enabled" != "1" ] && return 0
+
+    # Start monitoring in background if enabled
+    return 0
+}
+
+stop() {
+    return 0
+}
+
+reload() {
+    return 0
+}

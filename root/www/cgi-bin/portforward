@@ -1,0 +1,380 @@
+#!/bin/sh
+
+echo "Content-Type: application/json"
+echo "Status: 200 OK"
+echo ""
+
+# Read POST data if present
+POST_DATA=""
+CONTENT_LENGTH="${CONTENT_LENGTH:-0}"
+if [ "$CONTENT_LENGTH" -gt 0 ] 2>/dev/null; then
+    POST_DATA=$(dd bs="$CONTENT_LENGTH" count=1 2>/dev/null)
+fi
+
+# Parse query string
+CMD="${QUERY_STRING}"
+ACTION="${CMD%%&*}"
+
+# Helper functions
+log_event() {
+    local log_type="$1"
+    local log_ip="$2"
+    local log_msg="$3"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [${log_type}] ${log_ip:+${log_ip} - }${log_msg}" >> /var/log/portforward-guard/events.log
+}
+
+get_geo_info() {
+    local ip="$1"
+    local cache_file="/tmp/portforward_geo_cache.json"
+
+    # Check if ip is private
+    case "$ip" in
+        127.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|192.168.*)
+            echo '{"country":"Local","city":"Local","lat":"0","lon":"0","status":"private"}'
+            return
+            ;;
+    esac
+
+    # Check cache
+    if [ -f "$cache_file" ]; then
+        cached=$(grep "\"$ip\":" "$cache_file" 2>/dev/null | head -1)
+        if [ -n "$cached" ]; then
+            echo "$cached" | sed 's/.*"'"$ip"':[[:space:]]*//' | tr -d ','
+            return
+        fi
+    fi
+
+    # Query ip-api.com
+    result=$(curl -s "http://ip-api.com/json/${ip}?fields=status,country,countryCode,city,lat,lon,isp" 2>/dev/null)
+    if [ -n "$result" ]; then
+        echo "$result"
+        echo "{\"$ip\":$result}" >> "$cache_file" 2>/dev/null
+    else
+        echo '{"country":"Unknown","city":"Unknown","lat":"0","lon":"0"}'
+    fi
+}
+
+# Extract value from key=value using awk
+get_value() {
+    local data="$1"
+    local key="$2"
+    echo "$data" | awk -F'"'"$key"'"' '{split($2,a,"\""); print a[2]}' 2>/dev/null | head -1
+}
+
+parse_conntrack() {
+    if command -v conntrack >/dev/null 2>&1; then
+        conntrack -L -p all 2>/dev/null | while read line; do
+            parse_conntrack_line "$line"
+        done
+    else
+        cat /proc/net/nf_conntrack 2>/dev/null | while read line; do
+            parse_conntrack_line "$line"
+        done
+    fi
+}
+
+parse_conntrack_line() {
+    local line="$1"
+
+    # Get protocol
+    proto=$(echo "$line" | awk '{print $1}')
+    # Get state (4th field)
+    state=$(echo "$line" | awk '{print $4}')
+
+    # Extract src using grep and sed (POSIX compatible)
+    src=$(echo "$line" | grep -oE 'src=[0-9a-f.:]+' | head -1 | sed 's/src=//')
+    dst=$(echo "$line" | grep -oE 'dst=[0-9a-f.:]+' | head -1 | sed 's/dst=//')
+    sport=$(echo "$line" | grep -oE 'sport=[0-9]+' | head -1 | sed 's/sport=//')
+    dport=$(echo "$line" | grep -oE 'dport=[0-9]+' | head -1 | sed 's/dport=//')
+
+    # Skip if missing essential data
+    [ -z "$src" ] || [ -z "$dport" ] && return
+    echo "$proto|$state|$src|$dst|$sport|$dport"
+}
+
+is_ip_in_ipset() {
+    local ip="$1"
+    local ipset_name="$2"
+    ipset test "$ipset_name" "$ip" 2>/dev/null | grep -q "is in set" && echo "yes" || echo "no"
+}
+
+case "$CMD" in
+    *monitor*)
+        connections=$(parse_conntrack)
+        total=0
+        ipv4=0
+        ipv6=0
+
+        echo '{'
+        echo '"connections": ['
+
+        first=1
+        for conn in $connections; do
+            proto=$(echo "$conn" | cut -d'|' -f1)
+            state=$(echo "$conn" | cut -d'|' -f2)
+            src=$(echo "$conn" | cut -d'|' -f3)
+            dst=$(echo "$conn" | cut -d'|' -f4)
+            sport=$(echo "$conn" | cut -d'|' -f5)
+            dport=$(echo "$conn" | cut -d'|' -f6)
+
+            [ -z "$src" ] && continue
+
+            conn_id="${src}:${sport}:${dst}:${dport}:${proto}"
+            geo=$(get_geo_info "$src")
+            country=$(echo "$geo" | grep -oE '"country":"[^"]+"' | sed 's/"country":"//;s/"//')
+            lat=$(echo "$geo" | grep -oE '"lat":[0-9.-]+' | sed 's/"lat"://')
+            lon=$(echo "$geo" | grep -oE '"lon":[0-9.-]+' | sed 's/"lon"://')
+
+            in_blacklist=$(is_ip_in_ipset "$src" "portforward_blacklist")
+            in_whitelist=$(is_ip_in_ipset "$src" "portforward_whitelist")
+
+            if [ "$in_whitelist" = "yes" ]; then
+                list_status="whitelist"
+            elif [ "$in_blacklist" = "yes" ]; then
+                list_status="blacklist"
+            else
+                list_status="unknown"
+            fi
+
+            total=$((total + 1))
+            case "$src" in
+                *:*) ipv6=$((ipv6 + 1)) ;;
+                *) ipv4=$((ipv4 + 1)) ;;
+            esac
+
+            if [ $first -eq 1 ]; then
+                first=0
+            else
+                echo ","
+            fi
+
+            cat <<EOF
+{
+    "id": "$conn_id",
+    "proto": "$proto",
+    "state": "$state",
+    "src": "$src",
+    "dst": "$dst",
+    "sport": "$sport",
+    "dport": "$dport",
+    "country": "$country",
+    "lat": "$lat",
+    "lon": "$lon",
+    "listStatus": "$list_status"
+}
+EOF
+        done
+
+        echo '],'
+        echo "\"total\": $total,"
+        echo "\"ipv4\": $ipv4,"
+        echo "\"ipv6\": $ipv6"
+        echo '}'
+        ;;
+
+    *disconnect*)
+        conn_id=$(echo "$CMD" | sed -n 's/.*conn=\([^&]*\).*/\1/p')
+        if [ -n "$conn_id" ]; then
+            src=$(echo "$conn_id" | cut -d':' -f1)
+            sport=$(echo "$conn_id" | cut -d':' -f2)
+            dst=$(echo "$conn_id" | cut -d':' -f3)
+            dport=$(echo "$conn_id" | cut -d':' -f4)
+            proto=$(echo "$conn_id" | cut -d':' -f5)
+
+            # Kill connection using conntrack or iptables
+            if command -v conntrack >/dev/null 2>&1; then
+                conntrack -D -p "$proto" --src "$src" --dst "$dst" --sport "$sport" --dport "$dport" 2>/dev/null
+            fi
+            # Fallback: use iptables to drop connection
+            iptables -I INPUT -s "$src" -j DROP 2>/dev/null
+            echo '{"result":"ok","message":"连接已断开"}'
+        else
+            echo '{"result":"error","message":"无效的连接ID"}'
+        fi
+        ;;
+
+    *blacklist_add*)
+        ip=$(echo "$CMD" | sed -n 's/.*ip=\([^&]*\).*/\1/p' | sed 's/%20/ /g')
+        duration=$(echo "$CMD" | sed -n 's/.*duration=\([^&]*\).*/\1/p')
+        reason=$(echo "$CMD" | sed -n 's/.*reason=\([^&]*\).*/\1/p' | sed 's/%20/ /g')
+
+        [ -z "$duration" ] && duration=3600
+        [ -z "$reason" ] && reason="manual"
+
+        # Create ipset if not exists
+        ipset create portforward_blacklist hash:ip timeout 3600 2>/dev/null || true
+
+        # Add to ipset
+        if [ "$duration" = "0" ]; then
+            ipset add portforward_blacklist "$ip" 2>/dev/null
+        else
+            ipset add portforward_blacklist "$ip" timeout "$duration" 2>/dev/null
+        fi
+
+        log_event "block" "$ip" "Added to blacklist, reason: $reason, duration: ${duration}s"
+
+        echo '{"result":"ok","message":"已添加到黑名单"}'
+        ;;
+
+    *blacklist_del*)
+        ip=$(echo "$CMD" | sed -n 's/.*ip=\([^&]*\).*/\1/p')
+        if [ -n "$ip" ]; then
+            ipset del portforward_blacklist "$ip" 2>/dev/null
+            log_event "unblock" "$ip" "Removed from blacklist"
+            echo '{"result":"ok","message":"已从黑名单移除"}'
+        else
+            echo '{"result":"error","message":"无效的IP地址"}'
+        fi
+        ;;
+
+    *blacklist_list*)
+        echo '{"blacklist": ['
+        first=1
+        ipset list portforward_blacklist 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read line; do
+            ip=$(echo "$line" | awk '{print $1}')
+            timeout_val=$(echo "$line" | grep -oE 'timeout=[0-9]+' | sed 's/timeout=//')
+            if [ $first -eq 1 ]; then
+                first=0
+            else
+                echo ","
+            fi
+            if [ -n "$timeout_val" ]; then
+                echo "{\"ip\":\"$ip\",\"remaining\":\"${timeout_val}s\",\"reason\":\"-\",\"addedTime\":\"-\"}"
+            else
+                echo "{\"ip\":\"$ip\",\"remaining\":\"永久\",\"reason\":\"-\",\"addedTime\":\"-\"}"
+            fi
+        done
+        echo ']}'
+        ;;
+
+    *whitelist_add*)
+        ip=$(echo "$CMD" | sed -n 's/.*ip=\([^&]*\).*/\1/p' | sed 's/%20/ /g')
+        desc=$(echo "$CMD" | sed -n 's/.*desc=\([^&]*\).*/\1/p' | sed 's/%20/ /g')
+
+        [ -z "$desc" ] && desc="manual"
+
+        # Create ipset if not exists
+        ipset create portforward_whitelist hash:net 2>/dev/null || true
+
+        # Add to ipset
+        ipset add portforward_whitelist "$ip" 2>/dev/null
+
+        log_event "whitelist" "$ip" "Added to whitelist: $desc"
+
+        echo '{"result":"ok","message":"已添加到白名单"}'
+        ;;
+
+    *whitelist_del*)
+        ip=$(echo "$CMD" | sed -n 's/.*ip=\([^&]*\).*/\1/p')
+        if [ -n "$ip" ]; then
+            ipset del portforward_whitelist "$ip" 2>/dev/null
+            echo '{"result":"ok","message":"已从白名单移除"}'
+        else
+            echo '{"result":"error","message":"无效的IP地址"}'
+        fi
+        ;;
+
+    *whitelist_list*)
+        echo '{"whitelist": ['
+        first=1
+        ipset list portforward_whitelist 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|^[0-9a-f.:]+/[0-9]+' | while read ip; do
+            if [ $first -eq 1 ]; then
+                first=0
+            else
+                echo ","
+            fi
+            echo "{\"ip\":\"$ip\",\"desc\":\"-\",\"addedTime\":\"-\",\"lastSeen\":\"-\"}"
+        done
+        echo ']}'
+        ;;
+
+    *trace*)
+        ip=$(echo "$CMD" | sed -n 's/.*ip=\([^&]*\).*/\1/p')
+
+        echo '{"trace": {'
+        echo "\"ip\": \"$ip\","
+        echo '"connections": ['
+
+        first=1
+        # Use /proc/net/nf_conntrack for trace
+        grep "src=$ip" /proc/net/nf_conntrack 2>/dev/null | while read line; do
+            proto=$(echo "$line" | awk '{print $1}')
+            state=$(echo "$line" | awk '{print $4}')
+            dst=$(echo "$line" | grep -oE 'dst=[0-9a-f.:]+' | head -1 | sed 's/dst=//')
+            dport=$(echo "$line" | grep -oE 'dport=[0-9]+' | head -1 | sed 's/dport=//')
+
+            if [ $first -eq 1 ]; then
+                first=0
+            else
+                echo ","
+            fi
+
+            echo "{\"proto\":\"$proto\",\"state\":\"$state\",\"dst\":\"$dst\",\"dport\":\"$dport\"}"
+        done
+        echo ']}'
+
+        # ARP table lookup
+        arp_result=$(arp -a 2>/dev/null | grep "$ip")
+        if [ -n "$arp_result" ]; then
+            echo ',"arp": "'"$arp_result"'"'
+        fi
+
+        echo '}}'
+        ;;
+
+    *geo_lookup*)
+        ip=$(echo "$CMD" | sed -n 's/.*ip=\([^&]*\).*/\1/p')
+        result=$(get_geo_info "$ip")
+        echo "$result"
+        ;;
+
+    *logs*)
+        type_filter=$(echo "$CMD" | sed -n 's/.*type=\([^&]*\).*/\1/p')
+        ip_filter=$(echo "$CMD" | sed -n 's/.*ip=\([^&]*\).*/\1/p')
+
+        echo '{"logs": ['
+        first=1
+        if [ -f /var/log/portforward-guard/events.log ]; then
+            grep "${type_filter:-.}" /var/log/portforward-guard/events.log 2>/dev/null | \
+                grep "${ip_filter:-.}" | tail -100 | while read line; do
+                if [ $first -eq 1 ]; then
+                    first=0
+                else
+                    echo ","
+                fi
+                time=$(echo "$line" | cut -d']' -f1 | tr -d '[')
+                type=$(echo "$line" | cut -d'[' -f2 | cut -d']' -f1)
+                msg=$(echo "$line" | cut -d']' -f3 | tr -d ']')
+                echo "{\"time\":\"$time\",\"type\":\"$type\",\"ip\":\"\",\"message\":\"$msg\"}"
+            done
+        fi
+        echo ']}'
+        ;;
+
+    *logs_clear*)
+        > /var/log/portforward-guard/events.log 2>/dev/null
+        echo '{"result":"ok"}'
+        ;;
+
+    *stats*)
+        # Use /proc files for stats since conntrack may not be available
+        if [ -f /proc/net/nf_conntrack ]; then
+            total_conn=$(wc -l < /proc/net/nf_conntrack 2>/dev/null || echo 0)
+        else
+            total_conn=0
+        fi
+        blacklist_count=$(ipset list portforward_blacklist 2>/dev/null | grep -c 'Timeout:' || echo 0)
+        whitelist_count=$(ipset list portforward_whitelist 2>/dev/null | wc -l)
+
+        echo "{"
+        echo "\"total_connections\": $total_conn,"
+        echo "\"blacklist_count\": $blacklist_count,"
+        echo "\"whitelist_count\": $whitelist_count,"
+        echo "\"uptime\": \"$(uptime | cut -d',' -f1 | cut -d'up' -f2)\""
+        echo "}"
+        ;;
+
+    *)
+        echo '{"result":"error","message":"未知命令"}'
+        ;;
+esac
