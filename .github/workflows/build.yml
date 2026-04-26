@@ -14,7 +14,6 @@ jobs:
 
       - name: Set up OpenWrt SDK
         run: |
-          mkdir -p openwrt-sdk && cd openwrt-sdk
           SDK_URL="https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
           echo "Downloading $SDK_URL"
           curl -sL "$SDK_URL" -o sdk.tar.xz
@@ -23,28 +22,30 @@ jobs:
             exit 1
           fi
           file sdk.tar.xz
-          tar xJf sdk.tar.xz
+          mkdir -p sdk
+          cd sdk
+          tar xJf ../sdk.tar.xz
           cd ..
-          mv openwrt-sdk-*/* . 2>/dev/null || true
-          ls -la
+          ls -la sdk/
 
       - name: Copy package files
         run: |
-          cp -r root/* openwrt-sdk/package/luci-app-portforward-guard/
+          mkdir -p sdk/package/luci-app-portforward-guard
+          cp -r root/* sdk/package/luci-app-portforward-guard/
 
       - name: Update feeds
         run: |
-          cd openwrt-sdk
+          cd sdk
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Configure package
         run: |
-          cd openwrt-sdk
+          cd sdk
           make package/luci-app-portforward-guard/compile
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-portforward-guard-ipk
-          path: openwrt-sdk/bin/packages/*/luci/luci-app-portforward-guard*.ipk
+          path: sdk/bin/packages/*/luci/luci-app-portforward-guard*.ipk
