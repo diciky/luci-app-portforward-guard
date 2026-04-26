@@ -33,15 +33,10 @@ jobs:
           mkdir -p sdk/package/luci-app-portforward-guard
           cp -r root/* sdk/package/luci-app-portforward-guard/
 
-      - name: Update feeds
-        run: |
-          cd sdk
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
       - name: Configure package
         run: |
           cd sdk
+          make defconfig
           make package/luci-app-portforward-guard/compile
 
       - name: Upload artifact
