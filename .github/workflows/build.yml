@@ -16,8 +16,13 @@ jobs:
         run: |
           mkdir -p openwrt-sdk
           cd openwrt-sdk
-          curl -sL https://downloads.openwrt.org/releases/23.05.3/x86_64/openwrt-sdk-23.05.3-x86_64_gcc-12.3.0_musl.Linux-x86_64.tar.xz | tar xJ
-          mv openwrt-sdk-*/* ../
+          curl -sL "https://downloads.openwrt.org/releases/23.05.5/x86_64/openwrt-sdk-23.05.5-x86_64_gcc-12.3.0_musl.Linux-x86_64.tar.xz" -o sdk.tar.xz
+          if [ ! -f sdk.tar.xz ] || [ ! -s sdk.tar.xz ]; then
+            curl -sL "https://downloads.openwrt.org/releases/24.10.0/x86_64/openwrt-sdk-24.10.0-x86_64_gcc-14.2.0_musl.Linux-x86_64.tar.xz" -o sdk.tar.xz
+          fi
+          tar xJf sdk.tar.xz
+          mv openwrt-sdk-*/* ../ 2>/dev/null || true
+          mv ../openwrt-sdk-*/* ../ 2>/dev/null || true
           cd ..
 
       - name: Copy package files
