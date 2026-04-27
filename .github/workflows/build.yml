@@ -22,10 +22,15 @@ jobs:
             exit 1
           fi
           file sdk.tar.xz
+          tar xJf sdk.tar.xz
+          ls -la
+          # SDK extracts to openwrt-sdk-VERSION directory
+          SDK_DIR=$(ls -d openwrt-sdk-* 2>/dev/null | head -1)
+          echo "SDK directory: $SDK_DIR"
+          # Move contents to sdk folder for easier access
           mkdir -p sdk
-          cd sdk
-          tar xJf ../sdk.tar.xz
-          cd ..
+          mv $SDK_DIR/* sdk/
+          mv $SDK_DIR/.* sdk/ 2>/dev/null || true
           ls -la sdk/
 
       - name: Copy package files
@@ -36,7 +41,6 @@ jobs:
       - name: Configure package
         run: |
           cd sdk
-          make defconfig
           make package/luci-app-portforward-guard/compile
 
       - name: Upload artifact
