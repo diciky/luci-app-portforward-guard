@@ -39,8 +39,12 @@ jobs:
           cp -r root/* sdk/package/luci-app-portforward-guard/
 
       - name: Configure package
+        env:
+          TERMINFO: /usr/share/terminfo
         run: |
           cd sdk
+          export FORCE=1
+          make package/luci-app-portforward-guard/clean
           make package/luci-app-portforward-guard/compile
 
       - name: Upload artifact
