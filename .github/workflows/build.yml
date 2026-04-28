@@ -33,10 +33,24 @@ jobs:
           mv $SDK_DIR/.* sdk/ 2>/dev/null || true
           ls -la sdk/
 
+          # Fix missing scripts/feeds - create symlink to tools
+          if [ ! -f sdk/scripts/feeds ]; then
+            echo "Creating feeds symlink..."
+            mkdir -p sdk/scripts
+            ln -sf ../tools/feeds/feeds sdk/scripts/feeds
+            chmod +x sdk/scripts/feeds
+          fi
+
       - name: Copy package files
         run: |
           mkdir -p sdk/package/luci-app-portforward-guard
           cp -r root/* sdk/package/luci-app-portforward-guard/
+
+      - name: Update feeds
+        run: |
+          cd sdk
+          ./scripts/feeds update -a || echo "Feeds update attempted"
+          ./scripts/feeds install -a || echo "Feeds install attempted"
 
       - name: Configure package
         env:
